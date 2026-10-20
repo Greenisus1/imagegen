@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Imagegen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://js.puter.com/v2/"></script>
+<style>
+ body{background:#101014;color:#e8e8ee;font-family:monospace;max-width:720px;margin:24px auto;padding:0 16px}
+ h1{letter-spacing:2px}
+ textarea{width:100%;height:70px;background:#1c1c24;color:#e8e8ee;border:1px solid #444;border-radius:6px;padding:8px;font-family:monospace;font-size:15px}
+ button{background:#3a7bfd;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-family:monospace;font-size:15px;cursor:pointer;margin:8px 8px 8px 0}
+ button:disabled{opacity:.5;cursor:wait}
+ #status{color:#9ab;white-space:pre-wrap;margin:8px 0}
+ #result{margin-top:12px;max-width:100%}
+ #result img{max-width:100%;border:1px solid #333;border-radius:6px}
+ .note{color:#778;font-size:13px}
+ #gallery img{width:120px;margin:4px;border:1px solid #333;border-radius:4px}
+ #signin-box{border:1px solid #3a7bfd;border-radius:8px;padding:12px;margin:12px 0;display:none}
+ a{color:#3a7bfd}
+</style>
+</head>
+<body>
+<h1>IMAGEGEN</h1>
+<p class="note">Pictures are drawn in your browser by puter.js - free, no API key, nothing to install.
+Puter does ask you to sign in with a free Puter account before it will draw. You make that account
+yourself at Puter; this app never sees your password. Saved images are stored on this Pi.</p>
+<div id="signin-box">
+<b>One step first:</b> Puter needs you signed in before it can draw.
+<button id="signin">Sign in with Puter</button>
+<span class="note">A small Puter window pops up. Sign in there, then come back.</span>
+</div>
+<textarea id="prompt" placeholder="Describe the picture, e.g. a red robot fishing on the moon, cartoon style"></textarea>
+<br>
+<button id="go">Generate</button>
+<button id="save" disabled>Save to this Pi</button>
+<div id="status"></div>
+<div id="result"></div>
+<h2>Saved on this Pi</h2>
+<div id="gallery"></div>
+<script>
+const $ = id => document.getElementById(id);
+let lastImage = null;
+function say(t){ $('status').textContent = t; }
+async function isSignedIn(){
+  try{ return !!(puter.auth && puter.auth.isSignedIn && puter.auth.isSignedIn()); }
+  catch(e){ return false; }
+}
+async function showAuthState(){
+  $('signin-box').style.display = (await isSignedIn()) ? 'none' : 'block';
+}
+async function signIn(){
+  say('A Puter sign-in window should pop up now. Sign in there.');
+  try{
+    await puter.auth.signIn();
+    $('signin-box').style.display = 'none';
+    say('Signed in. Now describe a picture and press Generate.');
+    return true;
+  }catch(e){
+    say('Sign-in window closed before finishing. Press the sign-in button when you are ready.');
+    return false;
+  }
+}
+$('signin').onclick = signIn;
+async function gallery(){
+  try{
+    const r = await fetch('/images'); const d = await r.json();
+    $('gallery').innerHTML = d.images.map(f =>
+      `<a href="/images/${f}" target="_blank"><img src="/images/${f}" alt="${f}"></a>`).join('');
+  }catch(e){ /* gallery is optional */ }
+}
+function withTimeout(promise, ms, what){
+  return Promise.race([promise, new Promise((_, rej) =>
+    setTimeout(() => rej(new Error(what + ' took too long and was stopped')), ms))]);
+}
+$('go').onclick = async () => {
+  const prompt = $('prompt').value.trim();
+  if(!prompt){ say('Type what you want to see first.'); return; }
+  if(!(await isSignedIn())){
+    if(!(await signIn())) return;
+  }
+  $('go').disabled = true; $('save').disabled = true; $('result').innerHTML = '';
+  say('Drawing... this can take up to a minute.');
+  try{
+    const img = await withTimeout(puter.ai.txt2img(prompt), 150000, 'Drawing');
+    lastImage = img; $('result').innerHTML = ''; $('result').appendChild(img);
+    say('Done. Save it or tweak the words and draw again.');
+    $('save').disabled = false;
+  }catch(err){
+    const msg = String(err && (err.message || err) || err);
+    if(/auth|sign|login|token|401|403/i.test(msg)){
+      say('Puter wants you to sign in again. Use the sign-in button, then press Generate.');
+      $('signin-box').style.display = 'block';
+    }else{
+      say('It did not work: ' + msg + '\nCheck the Pi is online and try again.');
+    }
+  }
+  $('go').disabled = false;
+};
+$('save').onclick = async () => {
+  if(!lastImage) return;
+  $('save').disabled = true;
+  try{
+    const c = document.createElement('canvas');
+    c.width = lastImage.naturalWidth; c.height = lastImage.naturalHeight;
+    c.getContext('2d').drawImage(lastImage, 0, 0);
+    const data = c.toDataURL('image/png').split(',')[1];
+    const r = await fetch('/save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt: $('prompt').value.trim(), data})});
+    const d = await r.json();
+    if(d.saved){ say('Saved as ' + d.saved + ' on the Pi.'); gallery(); }
+    else say('Save failed: ' + (d.error || 'unknown'));
+  }catch(e){ say('Save failed: ' + e); }
+  $('save').disabled = false;
+};
+showAuthState();
+gallery();
+</script>
+</body>
+</html>
